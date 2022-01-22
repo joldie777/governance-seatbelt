@@ -1,0 +1,23 @@
+{
+  "name": "governance-seatbelt",
+  "version": "1.0.0",
+  "description": "Seatbelts for governance",
+  "main": "index.js",
+  "scripts": {
+    "start": "ts-node index.ts"
+  },
+  "keywords": [
+    "governance"
+  ],
+  "author": "Alexandr Pismenskiy <alexman.p93@gmail.com>",
+  "license": "ISC",
+  "dependencies": {
+    "@types/node": "^17.0.9",
+    "@types/node-fetch": "^2.5.12",
+    "ethers": "^5.5.3",
+    "evm-script-decoder": "git+https://github.com/lidofinance/evm-script-decoder.git",
+    "node-fetch": "^2.6.7",
+    "ts-node": "^10.4.0",
+    "typescript": "^4.5.4"
+  }
+}
