@@ -22,10 +22,15 @@ async function getAccountType(address: string, provider: InfuraProvider): Promis
 }
 
 async function getContractStatus(address: string): Promise<string> {
-  const response = await fetch(
-    `https://api.etherscan.io/api?module=contract&action=getabi&address=${address}&apikey=${ETHERSCAN_API_KEY}`
-  );
-  const data = await response.json();
+  const request = `https://api.etherscan.io/api?module=contract&action=getabi&address=${address}&apikey=${ETHERSCAN_API_KEY}`;
+
+  let response = await fetch(request);
+  let data = await response.json();
+
+  while (data['result'] === 'Max rate limit reached') {
+    response = await fetch(request);
+    data = await response.json();
+  }
 
   return data['status'] === '1' ? 'Verified' : 'Not verified';
 }
@@ -48,16 +53,17 @@ async function getCallData(call: EVMScriptCall, provider: InfuraProvider): Promi
   const data = [];
 
   for (let i = 0; i < call.abi.inputs.length; ++i) {
-    data[i] =
+    data.push(
       call.abi.inputs[i].type === 'address'
         ? await getAddressInfo(call.decodedCallData[i], provider)
-        : call.decodedCallData[i];
+        : call.decodedCallData[i]
+    );
   }
 
   return data;
 }
 
-async function decodeEVMScript(evmScript: string, provider: InfuraProvider): Promise<ICallInfo[]> {
+async function getEVMScriptCallsInfo(evmScript: string, provider: InfuraProvider): Promise<ICallInfo[]> {
   const decoder = new EVMScriptDecoder(
     new abiProviders.Etherscan({
       network: NETWORK,
@@ -119,7 +125,7 @@ async function getVotingInfo(
     yea: +(voting.yea / 10 ** decimals).toFixed(5),
     nay: +(voting.nay / 10 ** decimals).toFixed(5),
     votingPower: voting.votingPower / 10 ** decimals,
-    calls: await decodeEVMScript(voting.script, provider),
+    calls: await getEVMScriptCallsInfo(voting.script, provider),
   };
 }
 
