@@ -3,63 +3,6 @@ export const INFURA_PROJECT_ID = '8302779599c8449e88ca4aeb69b603ff';
 export const CONTRACT_ADDRESS = '0x2e59A20f205bB85a89C53f1936454680651E618e';
 export const ETHERSCAN_API_KEY = '6EHVYFTXEABHVTNKGZEXDJJPG1UVXP7SKJ';
 
-export const CONTRACT_ABI = [
-  {
-    constant: true,
-    inputs: [],
-    name: 'proxyType',
-    outputs: [{ name: 'proxyTypeId', type: 'uint256' }],
-    payable: false,
-    stateMutability: 'pure',
-    type: 'function',
-  },
-  {
-    constant: true,
-    inputs: [],
-    name: 'isDepositable',
-    outputs: [{ name: '', type: 'bool' }],
-    payable: false,
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
-    constant: true,
-    inputs: [],
-    name: 'implementation',
-    outputs: [{ name: '', type: 'address' }],
-    payable: false,
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
-    constant: true,
-    inputs: [],
-    name: 'appId',
-    outputs: [{ name: '', type: 'bytes32' }],
-    payable: false,
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
-    constant: true,
-    inputs: [],
-    name: 'kernel',
-    outputs: [{ name: '', type: 'address' }],
-    payable: false,
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
-    anonymous: false,
-    inputs: [
-      { indexed: false, name: 'sender', type: 'address' },
-      { indexed: false, name: 'value', type: 'uint256' },
-    ],
-    name: 'ProxyDeposit',
-    type: 'event',
-  },
-];
-
 export const VOTING_ABI = [
   {
     constant: true,

@@ -1,59 +1,63 @@
-import { ethers } from 'ethers';
-import { EVMScriptParser, EVMScriptDecoder, abiProviders } from 'evm-script-decoder';
+import { BigNumber, Contract, ethers } from 'ethers';
+import { InfuraProvider } from '@ethersproject/providers';
+import { EVMScriptDecoder, abiProviders } from 'evm-script-decoder';
+import { EVMScriptCall } from 'evm-script-decoder/lib/types';
 import fetch from 'node-fetch';
-import { VoteInformation } from './types';
-import {
-  NETWORK,
-  INFURA_PROJECT_ID,
-  CONTRACT_ADDRESS,
-  ETHERSCAN_API_KEY,
-  CONTRACT_ABI,
-  VOTING_ABI,
-  TOKEN_ABI,
-} from './constants';
+import { IAddressInfo, ICallInfo, IVotingInfo } from './types';
+import { NETWORK, INFURA_PROJECT_ID, CONTRACT_ADDRESS, ETHERSCAN_API_KEY, VOTING_ABI, TOKEN_ABI } from './constants';
 
-async function getDecimals(contract: ethers.Contract, provider: ethers.providers.InfuraProvider): Promise<number> {
+async function getDecimals(contract: Contract, provider: InfuraProvider): Promise<number> {
   const tokenAddress = await contract.token();
-  const tokenContract = new ethers.Contract(tokenAddress, TOKEN_ABI, provider);
+  const tokenContract = new Contract(tokenAddress, TOKEN_ABI, provider);
   return await tokenContract.decimals();
 }
 
-function getDate(timestamp: ethers.BigNumber): string {
+function getDate(timestamp: BigNumber): string {
   const date = new Date(timestamp.toNumber() * 1000);
   return date.toString();
 }
 
-async function getVoteInfo(contract: ethers.Contract, voteId: number, decimals: number): Promise<VoteInformation> {
-  const vote = await contract.getVote(ethers.BigNumber.from(voteId));
+async function getAccountType(address: string, provider: InfuraProvider): Promise<string> {
+  return (await provider.getCode(address)) === '0x' ? 'EOA' : 'Contract';
+}
+
+async function getContractStatus(address: string): Promise<string> {
+  const response = await fetch(
+    `https://api.etherscan.io/api?module=contract&action=getabi&address=${address}&apikey=${ETHERSCAN_API_KEY}`
+  );
+  const data = await response.json();
+
+  return data['status'] === '1' ? 'Verified' : 'Not verified';
+}
+
+async function getAddressInfo(address: string, provider: InfuraProvider): Promise<IAddressInfo> {
+  const accountType = await getAccountType(address, provider);
 
   return {
-    id: voteId,
-    status: vote.open ? 'In progress' : vote.executed ? 'Passed' : 'Rejected',
-    yesInPercent: +((vote.yea * 100) / vote.votingPower).toFixed(2),
-    noInPercent: +((vote.nay * 100) / vote.votingPower).toFixed(2),
-    supportRequiredInPercent: (vote.supportRequired * 100) / 10 ** decimals,
-    minAcceptQuorumInPercent: (vote.minAcceptQuorum * 100) / 10 ** decimals,
-    open: vote.open,
-    executed: vote.executed,
-    startDate: getDate(vote.startDate),
-    snapshotBlock: vote.snapshotBlock.toNumber(),
-    supportRequired: vote.supportRequired / 10 ** decimals,
-    minAcceptQuorum: vote.minAcceptQuorum / 10 ** decimals,
-    yea: +(vote.yea / 10 ** decimals).toFixed(5),
-    nay: +(vote.nay / 10 ** decimals).toFixed(5),
-    votingPower: vote.votingPower / 10 ** decimals,
+    address: address,
+    type: accountType,
+    status: accountType === 'Contract' ? await getContractStatus(address) : undefined,
   };
 }
 
-    // new abiProviders.Local({
-    //   '0x2e59A20f205bB85a89C53f1936454680651E618e': CONTRACT_ABI,
-    // }),
-    // new abiProviders.Etherscan({
-    //   network: NETWORK,
-    //   apiKey: ETHERSCAN_API_KEY,
-    //   fetch,
-    // })
-async function decodeEVMScript(evmScript: string, provider: ethers.providers.InfuraProvider): Promise<void> {
+async function getCallData(call: EVMScriptCall, provider: InfuraProvider): Promise<any[] | undefined> {
+  if (!call.abi || !call.abi.inputs || !call.decodedCallData) {
+    return call.decodedCallData;
+  }
+
+  const data = [];
+
+  for (let i = 0; i < call.abi.inputs.length; ++i) {
+    data[i] =
+      call.abi.inputs[i].type === 'address'
+        ? await getAddressInfo(call.decodedCallData[i], provider)
+        : call.decodedCallData[i];
+  }
+
+  return data;
+}
+
+async function decodeEVMScript(evmScript: string, provider: InfuraProvider): Promise<ICallInfo[]> {
   const decoder = new EVMScriptDecoder(
     new abiProviders.Etherscan({
       network: NETWORK,
@@ -66,7 +70,7 @@ async function decodeEVMScript(evmScript: string, provider: ethers.providers.Inf
             '__Proxy_implementation',
           ],
           async loadImplAddress(proxyAddress, abiElement) {
-            const contract = new ethers.Contract(proxyAddress, [abiElement], provider);
+            const contract = new Contract(proxyAddress, [abiElement], provider);
             return contract[abiElement.name]();
           },
         }),
@@ -76,28 +80,96 @@ async function decodeEVMScript(evmScript: string, provider: ethers.providers.Inf
 
   const decodedEVMScript = await decoder.decodeEVMScript(evmScript);
 
-  console.log(decodedEVMScript);
+  const calls = await Promise.all(
+    decodedEVMScript.calls.map(async (call): Promise<ICallInfo> => {
+      return {
+        addressInfo: await getAddressInfo(call.address, provider),
+        method: call.abi?.name,
+        inputs: call.abi?.inputs,
+        data: await getCallData(call, provider),
+        outputs: call.abi?.outputs,
+      };
+    })
+  );
+
+  return calls;
+}
+
+async function getVotingInfo(
+  contract: Contract,
+  votingId: number,
+  decimals: number,
+  provider: InfuraProvider
+): Promise<IVotingInfo> {
+  const voting = await contract.getVote(BigNumber.from(votingId));
+
+  return {
+    id: votingId,
+    status: voting.open ? 'In progress' : voting.executed ? 'Passed' : 'Rejected',
+    yesInPercent: +((voting.yea * 100) / voting.votingPower).toFixed(2),
+    noInPercent: +((voting.nay * 100) / voting.votingPower).toFixed(2),
+    supportRequiredInPercent: (voting.supportRequired * 100) / 10 ** decimals,
+    minAcceptQuorumInPercent: (voting.minAcceptQuorum * 100) / 10 ** decimals,
+    open: voting.open,
+    executed: voting.executed,
+    startDate: getDate(voting.startDate),
+    snapshotBlock: voting.snapshotBlock.toNumber(),
+    supportRequired: voting.supportRequired / 10 ** decimals,
+    minAcceptQuorum: voting.minAcceptQuorum / 10 ** decimals,
+    yea: +(voting.yea / 10 ** decimals).toFixed(5),
+    nay: +(voting.nay / 10 ** decimals).toFixed(5),
+    votingPower: voting.votingPower / 10 ** decimals,
+    calls: await decodeEVMScript(voting.script, provider),
+  };
+}
+
+async function getSeveralVotingsInfo(
+  contract: Contract,
+  votingIds: number[],
+  decimals: number,
+  provider: InfuraProvider
+): Promise<IVotingInfo[]> {
+  const votings: IVotingInfo[] = [];
+
+  for (const votingId of votingIds) {
+    votings.push(await getVotingInfo(contract, votingId, decimals, provider));
+  }
+
+  return votings;
+}
+
+async function getAllVotingsInfo(
+  contract: Contract,
+  decimals: number,
+  provider: InfuraProvider
+): Promise<IVotingInfo[]> {
+  const votings: IVotingInfo[] = [];
+
+  const countOfVotes = await contract.votesLength();
+
+  for (let i = 0; i < countOfVotes.toNumber(); ++i) {
+    votings.push(await getVotingInfo(contract, i, decimals, provider));
+  }
+
+  return votings;
 }
 
 async function main() {
-  const provider = new ethers.providers.InfuraProvider(NETWORK, INFURA_PROJECT_ID);
-  const contract = new ethers.Contract(CONTRACT_ADDRESS, VOTING_ABI, provider);
+  const provider = new InfuraProvider(NETWORK, INFURA_PROJECT_ID);
+  const contract = new Contract(CONTRACT_ADDRESS, VOTING_ABI, provider);
 
   const decimals = await getDecimals(contract, provider);
-  // const countOfVotes = await contract.votesLength();
 
-  // for (let i = 0; i < countOfVotes.toNumber(); ++i) {
-  //   await getVoteInfo(contract, i, decimals);
-  // }
+  const votingId = 110;
+  const votingInfo = await getVotingInfo(contract, votingId, decimals, provider);
+  console.dir(votingInfo, { depth: 4 });
 
-  // const voteInfo = await getVoteInfo(contract, 108, decimals);
-  // console.log(voteInfo);
+  // const votingIds = [107, 108, 109, 110];
+  // const votingsInfo = await getSeveralVotingsInfo(contract, votingIds, decimals, provider);
+  // console.dir(votingsInfo, { depth: 5 });
 
-  const vote = await contract.getVote(3);
-
-  //console.log(EVMScriptParser.parse(vote.script));
-
-  await decodeEVMScript(vote.script, provider);
+  // const votingsInfo = await getAllVotingsInfo(contract, decimals, provider);
+  // console.dir(votingsInfo, { depth: 5 });
 }
 
 main()
