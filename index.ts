@@ -8,11 +8,9 @@ import fetch from 'node-fetch';
 import { IAddressInfo, ICallInfo, IVotingInfo } from './types';
 import { NETWORK, INFURA_PROJECT_ID, CONTRACT_ADDRESS, ETHERSCAN_API_KEY } from './constants';
 
-async function getVotingABI(provider: InfuraProvider): Promise<string> {
-  console.log('Getting ABI for contract...');
-
+async function getAbiByAddress(address: string): Promise<string> {
   let response = await fetch(
-    `https://api.etherscan.io/api?module=contract&action=getabi&address=${CONTRACT_ADDRESS}&apikey=${ETHERSCAN_API_KEY}`
+    `https://api.etherscan.io/api?module=contract&action=getabi&address=${address}&apikey=${ETHERSCAN_API_KEY}`
   );
   let data = await response.json();
 
@@ -20,7 +18,15 @@ async function getVotingABI(provider: InfuraProvider): Promise<string> {
     throw new Error(`Etherscan - ${data['result']}`);
   }
 
-  const contract = new Contract(CONTRACT_ADDRESS, data['result'], provider);
+  return data['result'];
+}
+
+async function getVotingABI(provider: InfuraProvider): Promise<string> {
+  console.log('Getting ABI for contract...');
+
+  let abi = await getAbiByAddress(CONTRACT_ADDRESS);
+  const contract = new Contract(CONTRACT_ADDRESS, abi, provider);
+  
   let votingContract: string;
 
   try {
@@ -30,18 +36,11 @@ async function getVotingABI(provider: InfuraProvider): Promise<string> {
     throw new Error(`Infura - ${jsonError['error']['body']}`);
   }
 
-  response = await fetch(
-    `https://api.etherscan.io/api?module=contract&action=getabi&address=${votingContract}&apikey=${ETHERSCAN_API_KEY}`
-  );
-  data = await response.json();
-
-  if (data['message'] === 'NOTOK') {
-    throw new Error(`Etherscan - ${data['result']}`);
-  }
+  abi = await getAbiByAddress(votingContract);
 
   console.log('Done!');
 
-  return data['result'];
+  return abi;
 }
 
 function getDate(timestamp: BigNumber): string {
