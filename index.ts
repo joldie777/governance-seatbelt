@@ -1,15 +1,47 @@
-import { BigNumber, Contract, ethers } from 'ethers';
+require('dotenv').config();
+import { BigNumber, Contract } from 'ethers';
 import { InfuraProvider } from '@ethersproject/providers';
 import { EVMScriptDecoder, abiProviders } from 'evm-script-decoder';
 import { EVMScriptCall } from 'evm-script-decoder/lib/types';
+import * as readline from 'readline';
 import fetch from 'node-fetch';
 import { IAddressInfo, ICallInfo, IVotingInfo } from './types';
-import { NETWORK, INFURA_PROJECT_ID, CONTRACT_ADDRESS, ETHERSCAN_API_KEY, VOTING_ABI, TOKEN_ABI } from './constants';
+import { NETWORK, INFURA_PROJECT_ID, CONTRACT_ADDRESS, ETHERSCAN_API_KEY } from './constants';
 
-async function getDecimals(contract: Contract, provider: InfuraProvider): Promise<number> {
-  const tokenAddress = await contract.token();
-  const tokenContract = new Contract(tokenAddress, TOKEN_ABI, provider);
-  return await tokenContract.decimals();
+async function getVotingABI(provider: InfuraProvider): Promise<string> {
+  console.log('Getting ABI for contract...');
+
+  let response = await fetch(
+    `https://api.etherscan.io/api?module=contract&action=getabi&address=${CONTRACT_ADDRESS}&apikey=${ETHERSCAN_API_KEY}`
+  );
+  let data = await response.json();
+
+  if (data['message'] === 'NOTOK') {
+    throw new Error(`Etherscan - ${data['result']}`);
+  }
+
+  const contract = new Contract(CONTRACT_ADDRESS, data['result'], provider);
+  let votingContract: string;
+
+  try {
+    votingContract = await contract.implementation();
+  } catch (error) {
+    const jsonError = JSON.parse(JSON.stringify(error));
+    throw new Error(`Infura - ${jsonError['error']['body']}`);
+  }
+
+  response = await fetch(
+    `https://api.etherscan.io/api?module=contract&action=getabi&address=${votingContract}&apikey=${ETHERSCAN_API_KEY}`
+  );
+  data = await response.json();
+
+  if (data['message'] === 'NOTOK') {
+    throw new Error(`Etherscan - ${data['result']}`);
+  }
+
+  console.log('Done!');
+
+  return data['result'];
 }
 
 function getDate(timestamp: BigNumber): string {
@@ -30,6 +62,10 @@ async function getContractStatus(address: string): Promise<string> {
   while (data['result'] === 'Max rate limit reached') {
     response = await fetch(request);
     data = await response.json();
+  }
+
+  if (data['message'] === 'NOTOK') {
+    throw new Error(`Etherscan - ${data['result']}`);
   }
 
   return data['status'] === '1' ? 'Verified' : 'Not verified';
@@ -84,7 +120,11 @@ async function getEVMScriptCallsInfo(evmScript: string, provider: InfuraProvider
     })
   );
 
+  console.log('Decoding voting script...');
+
   const decodedEVMScript = await decoder.decodeEVMScript(evmScript);
+
+  console.log('Done!\nGetting calls data...');
 
   const calls = await Promise.all(
     decodedEVMScript.calls.map(async (call): Promise<ICallInfo> => {
@@ -98,84 +138,138 @@ async function getEVMScriptCallsInfo(evmScript: string, provider: InfuraProvider
     })
   );
 
+  console.log('Done!');
+
   return calls;
 }
 
 async function getVotingInfo(
   contract: Contract,
   votingId: number,
-  decimals: number,
+  PCT_BASE: any,
   provider: InfuraProvider
 ): Promise<IVotingInfo> {
+  console.log(`\nGetting data for voting ${votingId}...`);
+
   const voting = await contract.getVote(BigNumber.from(votingId));
 
-  return {
+  console.log('Done!');
+
+  const callsInfo = await getEVMScriptCallsInfo(voting.script, provider);
+  const votesCount = voting.yea.add(voting.nay);
+  const yesInPercent = votesCount.isZero() ? 0 : voting.yea.mul(100) / votesCount;
+  const noInPercent = votesCount.isZero() ? 0 : voting.nay.mul(100) / votesCount;
+  const supportRequiredInPercent = voting.supportRequired.mul(100) / PCT_BASE;
+  const minAcceptQuorumInPercent = voting.minAcceptQuorum.mul(100) / PCT_BASE;
+
+  var result = {
     id: votingId,
-    status: voting.open ? 'In progress' : voting.executed ? 'Passed' : 'Rejected',
-    yesInPercent: +((voting.yea * 100) / voting.votingPower).toFixed(2),
-    noInPercent: +((voting.nay * 100) / voting.votingPower).toFixed(2),
-    supportRequiredInPercent: (voting.supportRequired * 100) / 10 ** decimals,
-    minAcceptQuorumInPercent: (voting.minAcceptQuorum * 100) / 10 ** decimals,
+    status: voting.open
+      ? 'In progress'
+      : voting.executed
+      ? 'Passed (enacted)'
+      : callsInfo.length === 0 && yesInPercent > supportRequiredInPercent
+      ? 'Passed'
+      : 'Rejected',
     open: voting.open,
     executed: voting.executed,
     startDate: getDate(voting.startDate),
     snapshotBlock: voting.snapshotBlock.toNumber(),
-    supportRequired: voting.supportRequired / 10 ** decimals,
-    minAcceptQuorum: voting.minAcceptQuorum / 10 ** decimals,
-    yea: +(voting.yea / 10 ** decimals).toFixed(5),
-    nay: +(voting.nay / 10 ** decimals).toFixed(5),
-    votingPower: voting.votingPower / 10 ** decimals,
-    calls: await getEVMScriptCallsInfo(voting.script, provider),
+    supportRequired: `${supportRequiredInPercent}%`,
+    minAcceptQuorum: `${minAcceptQuorumInPercent}%`,
+    yea: `${+(voting.yea / PCT_BASE).toFixed(5)} (${+yesInPercent.toFixed(2)}%)`,
+    nay: `${+(voting.nay / PCT_BASE).toFixed(5)} (${+noInPercent.toFixed(2)}%)`,
+    votingPower: (voting.votingPower / PCT_BASE).toString(),
+    approval: `${+(voting.yea.mul(100) / voting.votingPower).toFixed(2)}%`,
+    calls: callsInfo,
   };
-}
 
-async function getSeveralVotingsInfo(
-  contract: Contract,
-  votingIds: number[],
-  decimals: number,
-  provider: InfuraProvider
-): Promise<IVotingInfo[]> {
-  const votings: IVotingInfo[] = [];
+  console.log(`Report for voting ${votingId} has been successfully generated!`);
 
-  for (const votingId of votingIds) {
-    votings.push(await getVotingInfo(contract, votingId, decimals, provider));
-  }
-
-  return votings;
+  return result;
 }
 
 async function getAllVotingsInfo(
   contract: Contract,
-  decimals: number,
+  countOfVotings: number,
+  PCT_BASE: number,
   provider: InfuraProvider
 ): Promise<IVotingInfo[]> {
   const votings: IVotingInfo[] = [];
 
-  const countOfVotes = await contract.votesLength();
-
-  for (let i = 0; i < countOfVotes.toNumber(); ++i) {
-    votings.push(await getVotingInfo(contract, i, decimals, provider));
+  for (let i = 0; i < countOfVotings; ++i) {
+    votings.push(await getVotingInfo(contract, i, PCT_BASE, provider));
   }
 
   return votings;
 }
 
-async function main() {
+async function main(): Promise<void> {
   const provider = new InfuraProvider(NETWORK, INFURA_PROJECT_ID);
-  const contract = new Contract(CONTRACT_ADDRESS, VOTING_ABI, provider);
+  const votingABI = await getVotingABI(provider);
+  const contract = new Contract(CONTRACT_ADDRESS, votingABI, provider);
+  const PCT_BASE = await contract.PCT_BASE();
+  const countOfVotings: number = await contract.votesLength();
 
-  const decimals = await getDecimals(contract, provider);
+  const startPrompt = `\nInput votingId (from 0 to ${
+    countOfVotings - 1
+  }) or "all" to generate report for all votings: `;
+  const finalPrompt = '\nInput "r" to restart or "q" to quit the program: ';
 
-  const votingId = 110;
-  const votingInfo = await getVotingInfo(contract, votingId, decimals, provider);
-  console.dir(votingInfo, { depth: 4 });
+  let isWaiting = false;
 
-  // const votingIds = [107, 108, 109, 110];
-  // const votingsInfo = await getSeveralVotingsInfo(contract, votingIds, decimals, provider);
-  // console.dir(votingsInfo, { depth: 5 });
+  return new Promise((resolve) => {
+    const rl = readline.createInterface(process.stdin, process.stdout);
 
-  // const votingsInfo = await getAllVotingsInfo(contract, decimals, provider);
-  // console.dir(votingsInfo, { depth: 5 });
+    rl.setPrompt(startPrompt);
+    rl.prompt();
+
+    rl.on('line', async (input) => {
+      if (input === 'q' || input === 'quit') {
+        rl.close();
+        return resolve();
+      }
+
+      if (!isWaiting) {
+        if (input === 'all') {
+          const votingsInfo = await getAllVotingsInfo(contract, countOfVotings, PCT_BASE, provider);
+
+          console.log('\nResult:');
+          console.dir(votingsInfo, { depth: 5 });
+
+          isWaiting = true;
+          rl.setPrompt(finalPrompt);
+        } else {
+          const votingId = parseInt(input);
+
+          if (isNaN(votingId)) {
+            console.warn('Incorrect input. Try again...');
+          } else if (votingId < 0 || votingId >= countOfVotings) {
+            console.warn('The number is out of range. Try again...');
+          } else {
+            const votingInfo = await getVotingInfo(contract, votingId, PCT_BASE, provider);
+
+            console.log('\nResult:');
+            console.dir(votingInfo, { depth: 4 });
+
+            isWaiting = true;
+            rl.setPrompt(finalPrompt);
+          }
+        }
+      } else {
+        if (input === 'r' || input === 'restart') {
+          isWaiting = false;
+          rl.setPrompt(startPrompt);
+        } else {
+          console.warn(`Unknown command: "${input}"`);
+        }
+      }
+
+      rl.prompt();
+    }).on('close', () => {
+      console.log('The program has been stopped.\n');
+    });
+  });
 }
 
 main()
