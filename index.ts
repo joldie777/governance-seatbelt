@@ -1,4 +1,4 @@
-require('dotenv').config();
+import 'dotenv/config';
 import { BigNumber, Contract } from 'ethers';
 import { InfuraProvider } from '@ethersproject/providers';
 import { EVMScriptDecoder, abiProviders } from 'evm-script-decoder';
@@ -9,10 +9,10 @@ import { IAddressInfo, ICallInfo, IVotingInfo } from './types';
 import { NETWORK, INFURA_PROJECT_ID, CONTRACT_ADDRESS, ETHERSCAN_API_KEY } from './constants';
 
 async function getAbiByAddress(address: string): Promise<string> {
-  let response = await fetch(
+  const response = await fetch(
     `https://api.etherscan.io/api?module=contract&action=getabi&address=${address}&apikey=${ETHERSCAN_API_KEY}`
   );
-  let data = await response.json();
+  const data = await response.json();
 
   if (data['message'] === 'NOTOK') {
     throw new Error(`Etherscan - ${data['result']}`);
@@ -26,7 +26,7 @@ async function getVotingABI(provider: InfuraProvider): Promise<string> {
 
   let abi = await getAbiByAddress(CONTRACT_ADDRESS);
   const contract = new Contract(CONTRACT_ADDRESS, abi, provider);
-  
+
   let votingContract: string;
 
   try {
@@ -160,6 +160,7 @@ async function getVotingInfo(
   const noInPercent = votesCount.isZero() ? 0 : voting.nay.mul(100) / votesCount;
   const supportRequiredInPercent = voting.supportRequired.mul(100) / PCT_BASE;
   const minAcceptQuorumInPercent = voting.minAcceptQuorum.mul(100) / PCT_BASE;
+  const approvalInPercent = voting.yea.mul(100) / voting.votingPower;
 
   var result = {
     id: votingId,
@@ -167,7 +168,9 @@ async function getVotingInfo(
       ? 'In progress'
       : voting.executed
       ? 'Passed (enacted)'
-      : callsInfo.length === 0 && yesInPercent > supportRequiredInPercent
+      : callsInfo.length === 0 &&
+        yesInPercent > supportRequiredInPercent &&
+        approvalInPercent > minAcceptQuorumInPercent
       ? 'Passed'
       : 'Rejected',
     open: voting.open,
@@ -179,7 +182,7 @@ async function getVotingInfo(
     yea: `${+(voting.yea / PCT_BASE).toFixed(5)} (${+yesInPercent.toFixed(2)}%)`,
     nay: `${+(voting.nay / PCT_BASE).toFixed(5)} (${+noInPercent.toFixed(2)}%)`,
     votingPower: (voting.votingPower / PCT_BASE).toString(),
-    approval: `${+(voting.yea.mul(100) / voting.votingPower).toFixed(2)}%`,
+    approval: `${+approvalInPercent.toFixed(2)}%`,
     calls: callsInfo,
   };
 
