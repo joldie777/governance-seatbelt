@@ -3,8 +3,9 @@ import { BigNumber, Contract } from 'ethers';
 import { InfuraProvider } from '@ethersproject/providers';
 import { EVMScriptDecoder, abiProviders } from 'evm-script-decoder';
 import { EVMScriptCall } from 'evm-script-decoder/lib/types';
-import * as readline from 'readline';
+import readline from 'readline';
 import fetch from 'node-fetch';
+import fs from 'fs';
 import { IAddressInfo, ICallInfo, IVotingInfo } from './types';
 import { NETWORK, INFURA_PROJECT_ID, CONTRACT_ADDRESS, ETHERSCAN_API_KEY } from './constants';
 
@@ -31,8 +32,8 @@ async function getVotingABI(provider: InfuraProvider): Promise<string> {
 
   try {
     votingContract = await contract.implementation();
-  } catch (error) {
-    const jsonError = JSON.parse(JSON.stringify(error));
+  } catch (err) {
+    const jsonError = JSON.parse(JSON.stringify(err));
     throw new Error(`Infura - ${jsonError['error']['body']}`);
   }
 
@@ -235,9 +236,16 @@ async function main(): Promise<void> {
       if (!isWaiting) {
         if (input === 'all') {
           const votingsInfo = await getAllVotingsInfo(contract, countOfVotings, PCT_BASE, provider);
+          const jsonContent = JSON.stringify(votingsInfo, null, 2);
+          const fileName = 'votings_report.json';
 
-          console.log('\nResult:');
-          console.dir(votingsInfo, { depth: 5 });
+          fs.writeFile(fileName, jsonContent, 'utf8', (err) => {
+            if (err) {
+              throw new Error('An error occured while writing JSON object to a file!');
+            }
+          });
+
+          console.log(`\nVotings report has been saved to the file "${fileName}".`);
 
           isWaiting = true;
           rl.setPrompt(finalPrompt);
